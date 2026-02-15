@@ -1,5 +1,6 @@
 #include <Windows.h>
 //
+#include <Sddl.h>
 #include <TlHelp32.h>
 
 #include <atomic>
@@ -47,20 +48,25 @@ cleanup:
 static void WaitForModuleUnload(DWORD pid, const char* module_name) {
   HANDLE snapshot = nullptr;
   MODULEENTRY32 me32{sizeof(MODULEENTRY32)};
-  bool found = false;
+  bool found = true;  // assume loaded until proven otherwise
 
-  do {
+  while (found && g_running) {
     found = false;
     snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
-    if (!snapshot) {
-      fprintf(stderr, "could not create module snapshot\n");
-      return;
+    if (!snapshot || snapshot == INVALID_HANDLE_VALUE) {
+      // Snapshot can fail transiently (e.g. access denied during injection).
+      // Retry instead of giving up — the module is presumably still loaded.
+      found = true;
+      Sleep(1000);
+      continue;
     }
 
+    me32.dwSize = sizeof(MODULEENTRY32);
     if (!Module32First(snapshot, &me32)) {
-      fprintf(stderr, "could not get module entry from snapshot\n");
       CloseHandle(snapshot);
-      return;
+      found = true;
+      Sleep(1000);
+      continue;
     }
 
     do {
@@ -72,17 +78,31 @@ static void WaitForModuleUnload(DWORD pid, const char* module_name) {
     CloseHandle(snapshot);
     snapshot = nullptr;
     Sleep(1000);
-  } while (found && g_running);
+  }
 }
 
 // Pipe server that receives logs from the injected DLL
 class PipeServer {
  public:
-  PipeServer() : pipe_(INVALID_HANDLE_VALUE), connected_(false) {}
+  PipeServer() : pipe_(INVALID_HANDLE_VALUE), connected_(false), log_file_(nullptr) {}
 
   ~PipeServer() { Stop(); }
 
   bool Start() {
+    // Open log file next to the executable (truncated on each run).
+    log_file_ = fopen("nyx.log", "w");
+    if (!log_file_) {
+      fprintf(stderr, "Warning: could not open nyx.log for writing\n");
+    }
+
+    // Allow access from processes running at any integrity level (e.g. elevated D2R.exe).
+    SECURITY_ATTRIBUTES sa{};
+    SECURITY_DESCRIPTOR sd{};
+    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);  // null DACL = allow everyone
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = &sd;
+
     pipe_ = CreateNamedPipeA(kPipeName,
                              PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                              PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
@@ -90,7 +110,7 @@ class PipeServer {
                              4096,    // out buffer
                              4096,    // in buffer
                              0,       // timeout
-                             nullptr  // security
+                             &sa      // security — allow cross-integrity access
     );
 
     if (pipe_ == INVALID_HANDLE_VALUE) {
@@ -114,6 +134,10 @@ class PipeServer {
     }
     if (server_thread_.joinable()) {
       server_thread_.join();
+    }
+    if (log_file_) {
+      fclose(log_file_);
+      log_file_ = nullptr;
     }
   }
 
@@ -195,9 +219,13 @@ class PipeServer {
 
           if (success && bytes_read > 0) {
             buffer[bytes_read] = '\0';
-            // Print received log message
+            // Print to terminal and mirror to log file.
             fprintf(stdout, "%s", buffer);
             fflush(stdout);
+            if (log_file_) {
+              fprintf(log_file_, "%s", buffer);
+              fflush(log_file_);
+            }
           }
         }
 
@@ -212,6 +240,7 @@ class PipeServer {
   std::atomic<bool> running_{false};
   std::atomic<bool> connected_{false};
   std::thread server_thread_;
+  FILE* log_file_;
 };
 
 static PipeServer g_pipe_server;
