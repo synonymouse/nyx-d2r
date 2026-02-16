@@ -1,13 +1,21 @@
 'use strict';
 
-import { ObjectManager, UnitTypes, DebugPanel, revealLevel } from 'nyx:d2r';
+import { ObjectManager, UnitTypes, DebugPanel, AutomapMarkers, revealLevel } from 'nyx:d2r';
 import { withGameLock } from 'nyx:memory';
 
 const binding = internalBinding('d2r');
 
+// --- Debug: automap cell ID grid ---
+// Toggle to place a grid of cells with sequential IDs near the player.
+// Useful for discovering which nCellNo values produce which icons.
+const CELL_TEST_ENABLED = false;
+const CELL_TEST_START_ID = 300;
+const CELL_TEST_COUNT = 10;
+
 try {
   const objMgr = new ObjectManager();
   const debugPanel = new DebugPanel(objMgr);
+  const markers = new AutomapMarkers(objMgr);
 
   objMgr.tick();
 
@@ -39,16 +47,8 @@ try {
     count++;
   }
 
-  // --- Automap cell ID discovery ---
-  // Places a grid of automap cells with sequential IDs near the player.
-  // Change startId/count and re-inject to scan different ID ranges.
-  // Known valid ranges from log: 100-115, 257-273, 307, 454-456, 497-498
-  let cellTestDone = false;
-  const CELL_TEST_ENABLED = true;
-  const CELL_TEST_START_ID = 300;
-  const CELL_TEST_COUNT = 10;
-
   let revealed_levels = [];
+  let cellTestDone = false;
   setInterval(() => {
     objMgr.tick();
     debugPanel.refresh();
@@ -62,14 +62,14 @@ try {
       const currentLevelId = me.path?.room?.drlgRoom?.level?.id;
       if (currentLevelId !== undefined && !revealed_levels.includes(currentLevelId)) {
         withGameLock(_ => {
-          if (binding.revealLevel(currentLevelId)) {
+          if (revealLevel(currentLevelId)) {
             console.log(`Revealed level ${currentLevelId}`);
             revealed_levels.push(currentLevelId);
           }
         });
       }
 
-      // Place test automap cells once per session
+      // Debug: place cell ID grid once per level
       if (CELL_TEST_ENABLED && !cellTestDone) {
         cellTestDone = true;
         withGameLock(_ => {
@@ -77,6 +77,10 @@ try {
           console.log(`testAutomapCells(${me.posX}, ${me.posY}, ${CELL_TEST_START_ID}, ${CELL_TEST_COUNT}) = ${ok}`);
         });
       }
+
+      withGameLock(_ => {
+        markers.tick();
+      });
     }
   }, 20);
 } catch (err) {
