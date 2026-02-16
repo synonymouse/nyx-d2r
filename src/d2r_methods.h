@@ -10,4 +10,9 @@ D2UnitStrc* GetPlayerUnit(uint32_t index);
 bool AutomapReveal(D2ActiveRoomStrc* hRoom);
 bool RevealLevelById(uint32_t id);
 
+// Automap marker functions
+bool AddAutomapMarker(int32_t posX, int32_t posY, uint16_t cellNo);
+void ClearAutomapMarkers();
+bool TestAutomapCells(int32_t baseX, int32_t baseY, uint16_t startId, uint16_t count);
+
 }

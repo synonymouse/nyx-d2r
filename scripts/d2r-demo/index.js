@@ -39,6 +39,15 @@ try {
     count++;
   }
 
+  // --- Automap cell ID discovery ---
+  // Places a grid of automap cells with sequential IDs near the player.
+  // Change startId/count and re-inject to scan different ID ranges.
+  // Known valid ranges from log: 100-115, 257-273, 307, 454-456, 497-498
+  let cellTestDone = false;
+  const CELL_TEST_ENABLED = true;
+  const CELL_TEST_START_ID = 300;
+  const CELL_TEST_COUNT = 10;
+
   let revealed_levels = [];
   setInterval(() => {
     objMgr.tick();
@@ -47,6 +56,7 @@ try {
     if (!me && revealed_levels.length > 0) {
       console.log("Resetting revealed levels");
       revealed_levels = [];
+      cellTestDone = false;
     }
     if (me) {
       const currentLevelId = me.path?.room?.drlgRoom?.level?.id;
@@ -56,6 +66,15 @@ try {
             console.log(`Revealed level ${currentLevelId}`);
             revealed_levels.push(currentLevelId);
           }
+        });
+      }
+
+      // Place test automap cells once per session
+      if (CELL_TEST_ENABLED && !cellTestDone) {
+        cellTestDone = true;
+        withGameLock(_ => {
+          const ok = binding.testAutomapCells(me.posX, me.posY, CELL_TEST_START_ID, CELL_TEST_COUNT);
+          console.log(`testAutomapCells(${me.posX}, ${me.posY}, ${CELL_TEST_START_ID}, ${CELL_TEST_COUNT}) = ${ok}`);
         });
       }
     }

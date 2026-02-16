@@ -1,6 +1,6 @@
 # From https://github.com/alexkaratarakis/gitattributes
 # For license and copyright go there
-* test=auto
+* text=auto
 
 #
 # Exclude files from exporting

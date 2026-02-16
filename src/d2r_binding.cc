@@ -68,6 +68,38 @@ void GetServerSideUnitHashTableAddress(const FunctionCallbackInfo<Value>& args) 
   args.GetReturnValue().Set(BigInt::NewFromUnsigned(isolate, reinterpret_cast<uint64_t>(addr)));
 }
 
+static void AddMarker(const FunctionCallbackInfo<Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  Environment* env = Environment::GetCurrent(isolate);
+  Local<Context> context = env->context();
+  if (args.Length() < 3 || !args[0]->IsInt32() || !args[1]->IsInt32() || !args[2]->IsUint32()) {
+    return args.GetReturnValue().Set(false);
+  }
+  int32_t posX = args[0]->Int32Value(context).FromJust();
+  int32_t posY = args[1]->Int32Value(context).FromJust();
+  uint16_t cellNo = static_cast<uint16_t>(args[2]->Uint32Value(context).FromJust());
+  args.GetReturnValue().Set(AddAutomapMarker(posX, posY, cellNo));
+}
+
+static void ClearMarkers(const FunctionCallbackInfo<Value>& args) {
+  ClearAutomapMarkers();
+}
+
+static void TestCells(const FunctionCallbackInfo<Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  Environment* env = Environment::GetCurrent(isolate);
+  Local<Context> context = env->context();
+  if (args.Length() < 4 || !args[0]->IsInt32() || !args[1]->IsInt32() || !args[2]->IsUint32() ||
+      !args[3]->IsUint32()) {
+    return args.GetReturnValue().Set(false);
+  }
+  int32_t baseX = args[0]->Int32Value(context).FromJust();
+  int32_t baseY = args[1]->Int32Value(context).FromJust();
+  uint16_t startId = static_cast<uint16_t>(args[2]->Uint32Value(context).FromJust());
+  uint16_t count = static_cast<uint16_t>(args[3]->Uint32Value(context).FromJust());
+  args.GetReturnValue().Set(TestAutomapCells(baseX, baseY, startId, count));
+}
+
 void InitD2RBinding(nyx::IsolateData* isolate_data, Local<ObjectTemplate> target) {
   Isolate* isolate = isolate_data->isolate();
 
@@ -83,6 +115,9 @@ void InitD2RBinding(nyx::IsolateData* isolate_data, Local<ObjectTemplate> target
   nyx::SetMethod(isolate, target, "getLocalPlayerIndex", GetLocalPlayerIndex);
   nyx::SetMethod(isolate, target, "getClientSideUnitHashTableAddress", GetClientSideUnitHashTableAddress);
   nyx::SetMethod(isolate, target, "getServerSideUnitHashTableAddress", GetServerSideUnitHashTableAddress);
+  nyx::SetMethod(isolate, target, "addAutomapMarker", AddMarker);
+  nyx::SetMethod(isolate, target, "clearAutomapMarkers", ClearMarkers);
+  nyx::SetMethod(isolate, target, "testAutomapCells", TestCells);
 }
 
 }  // namespace d2r

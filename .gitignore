@@ -12,3 +12,6 @@ enc_temp_folder
 
 *.pyc
 *.lib
+
+# Windows reserved device names
+nul

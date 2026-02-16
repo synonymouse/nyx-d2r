@@ -386,4 +386,140 @@ bool RevealLevelById(uint32_t id) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Automap markers — inject cells into visible_extras for unit markers
+// ---------------------------------------------------------------------------
+
+static bool InsertAutomapCell(int32_t posX, int32_t posY, uint16_t cellNo,
+                              D2LinkedList<D2AutomapCellStrc>* cells) {
+  // Convert subtile coordinates to automap pixel coordinates.
+  // Tile-based code uses 80 * (x - y); subtile = tile * 5, so factor = 80 / 5 = 16.
+  int32_t absx = 16 * (posX - posY);
+  int32_t absy = (16 * (posX + posY)) >> 1;  // = 8 * (posX + posY)
+
+  auto pack_coords = [](int32_t low, int32_t high) -> uint64_t {
+    return (static_cast<uint64_t>(high / 10) << 32) | static_cast<uint32_t>(low / 10);
+  };
+  auto get_low_value = [](uint64_t value) -> int32_t { return (value << 32) >> 32; };
+  auto get_high_value = [](uint64_t value) -> int32_t { return value >> 32; };
+
+  int64_t packed = pack_coords(absx, absy);
+  if (get_low_value(packed) + 0x8000 > 0xFFFF) {
+    return false;
+  }
+  if (get_high_value(packed) + 0x8000 > 0xFFFF) {
+    return false;
+  }
+  if (cellNo + 0x8000 > 0xFFFF) {
+    return false;
+  }
+
+#pragma pack(push, 1)
+  struct D2AutomapInitData {
+    uint16_t fSaved;
+    uint16_t nCellNo;
+    uint64_t nPacked;
+  } init_data;
+#pragma pack(pop)
+  init_data.fSaved = 0;
+  init_data.nCellNo = cellNo;
+  init_data.nPacked = packed;
+
+  struct Link {
+    D2AutomapCellStrc* tail;
+    D2AutomapCellStrc** head;
+  };
+  Link link;
+  Link* ret = reinterpret_cast<Link* (*)(D2LinkedList<D2AutomapCellStrc>*, Link*, D2AutomapInitData*)>(
+      AUTOMAP_NewAutomapCell)(cells, &link, &init_data);
+  if (ret == nullptr || ret->head == nullptr) {
+    return false;
+  }
+
+  auto prev_next_ptr = ret->head;
+  auto allocator = reinterpret_cast<void* (*)()>(BcAllocator)();
+  auto alloc_fn = reinterpret_cast<void* (*)(void*, size_t, size_t)>((*reinterpret_cast<void***>(allocator))[1]);
+  D2AutomapCellStrc* new_cell = static_cast<D2AutomapCellStrc*>(alloc_fn(allocator, sizeof(D2AutomapCellStrc), 0x10));
+
+  cells->count++;
+
+  auto prev_cell = link.tail;
+  new_cell->pTail = link.tail;
+  new_cell->pHead = 0;
+  new_cell->N00000B37 = 0;
+  *(uint64_t*)new_cell->pad_0018 = 0;
+  new_cell->fSaved = init_data.fSaved;
+  new_cell->nCellNo = init_data.nCellNo;
+  new_cell->xPixel = get_low_value(packed);
+  new_cell->yPixel = get_high_value(packed);
+
+  if (prev_cell == (D2AutomapCellStrc*)cells) {
+    cells->head = new_cell;
+    cells->sentinel = (D2LinkedList<D2AutomapCellStrc>*)new_cell;
+  } else {
+    *prev_next_ptr = new_cell;
+    if (prev_cell == (D2AutomapCellStrc*)cells->sentinel && prev_next_ptr == &prev_cell->pHead) {
+      cells->sentinel = (D2LinkedList<D2AutomapCellStrc>*)new_cell;
+    }
+    if (prev_cell != (D2AutomapCellStrc*)cells->tail || prev_next_ptr != &prev_cell->N00000B37) {
+      reinterpret_cast<void* (*)(D2LinkedList<D2AutomapCellStrc>*, D2AutomapCellStrc*)>(AUTOMAP_AddAutomapCell)(
+          cells, new_cell);
+      return true;
+    }
+  }
+  cells->tail = (D2LinkedList<D2AutomapCellStrc>*)new_cell;
+  reinterpret_cast<void* (*)(D2LinkedList<D2AutomapCellStrc>*, D2AutomapCellStrc*)>(AUTOMAP_AddAutomapCell)(cells,
+                                                                                                           new_cell);
+  return true;
+}
+
+bool AddAutomapMarker(int32_t posX, int32_t posY, uint16_t cellNo) {
+  D2AutomapLayerStrc* layer = *static_cast<D2AutomapLayerStrc**>(s_currentAutomapLayer);
+  if (layer == nullptr) {
+    return false;
+  }
+  return InsertAutomapCell(posX, posY, cellNo, &layer->visible_objects);
+}
+
+void ClearAutomapMarkers() {
+  D2AutomapLayerStrc* layer = *static_cast<D2AutomapLayerStrc**>(s_currentAutomapLayer);
+  if (layer == nullptr) {
+    return;
+  }
+  auto clear_list = reinterpret_cast<void (*)(D2LinkedList<D2AutomapCellStrc>*)>(ClearLinkedList);
+  clear_list(&layer->visible_objects);
+}
+
+bool TestAutomapCells(int32_t baseX, int32_t baseY, uint16_t startId, uint16_t count) {
+  D2AutomapLayerStrc* layer = *static_cast<D2AutomapLayerStrc**>(s_currentAutomapLayer);
+  if (layer == nullptr) {
+    PIPE_LOG("TestAutomapCells: no automap layer");
+    return false;
+  }
+
+  // Clear previous test markers from visible_objects
+  auto clear_list = reinterpret_cast<void (*)(D2LinkedList<D2AutomapCellStrc>*)>(ClearLinkedList);
+  clear_list(&layer->visible_objects);
+
+  // Place cells in a single row, spacing of 30 subtiles apart for clear identification
+  constexpr int32_t kCols = 10;
+  constexpr int32_t kSpacing = 30;  // subtile spacing between markers
+  int32_t placed = 0;
+
+  for (uint16_t i = 0; i < count; ++i) {
+    int32_t col = i % kCols;
+    int32_t row = i / kCols;
+    int32_t px = baseX + col * kSpacing;
+    int32_t py = baseY + row * kSpacing;
+    uint16_t cell_id = startId + i;
+
+    if (InsertAutomapCell(px, py, cell_id, &layer->visible_objects)) {
+      placed++;
+    }
+  }
+
+  PIPE_LOG("TestAutomapCells: placed {} / {} cells (ids {} - {})", placed, count, startId, startId + count - 1);
+  return placed > 0;
+}
+
 }  // namespace d2r
